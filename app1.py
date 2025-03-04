@@ -1,3 +1,5 @@
+
+
 import streamlit as st
 import pandas as pd
 import pymysql
@@ -56,6 +58,36 @@ def extract_data(database_name, table_name):
         st.error(f"Error extracting data from table '{table_name}': {e}")
         return pd.DataFrame()
 
+def clean_data(df, cleaning_options):
+    try:
+        st.write("Raw Data Before Cleaning:")
+        st.dataframe(df)
+
+        for column, options in cleaning_options.items():
+            if 'drop_duplicates' in options:
+                df = df.drop_duplicates(subset=[column], keep='first')
+                st.write(f"Dropped duplicates in column '{column}'.")
+            if 'remove_nulls' in options:
+                df = df[df[column].notnull()]
+                st.write(f"Removed null values in column '{column}'.")
+            if 'validate_string' in options:
+                df = df[df[column].astype(str).str.strip() != '']
+                st.write(f"Removed empty or whitespace-only strings in column '{column}'.")
+            if 'validate_length' in options:
+                df = df[df[column].astype(str).str.len() >= 3]
+                st.write(f"Kept rows where length of column '{column}' is >= 3.")
+            if 'validate_numeric' in options:
+                df = df[pd.to_numeric(df[column], errors='coerce').notnull()]
+                st.write(f"Kept rows where column '{column}' contains valid numeric values.")
+
+        df['id'] = range(1, len(df) + 1)
+        st.write("Cleaned Data After Processing:")
+        st.dataframe(df)
+        return df
+    except Exception as e:
+        st.error(f"Data cleaning failed: {e}")
+        return pd.DataFrame()
+
 def load_cleaned_data(cleaned_df, database_name):
     try:
         engine = create_engine(f'mysql+pymysql://{st.session_state.db_user}:{quote_plus(st.session_state.db_password)}@{st.session_state.db_host}/{database_name}')
@@ -110,98 +142,82 @@ def data_cleaning_page():
     if not st.session_state.raw_data.empty:
         st.write("Raw Data:")
         st.dataframe(st.session_state.raw_data)
-        
         cleaning_options = {}
         for column in st.session_state.raw_data.columns:
             st.write(f"Cleaning options for column: **{column}**")
             options = st.multiselect(
                 f"Select cleaning operations for column '{column}':",
-                [
-                    'Remove Duplicates', 
-                    'Fill Missing Data', 
-                    'Drop Rows with Missing Data',
-                    'Correct Errors', 
-                    'Standardize Format', 
-                    'Trim Whitespaces', 
-                    'Convert Data Types', 
-                    'Remove Outliers', 
-                    'Validate Data'
-                ]
+                ['drop_duplicates', 'remove_nulls', 'validate_string', 'validate_length', 'validate_numeric']
             )
             cleaning_options[column] = options
-
         if st.button("Clean Data"):
-            cleaned_df = st.session_state.raw_data.copy()
-
-            for column, options in cleaning_options.items():
-                if 'Remove Duplicates' in options:
-                    cleaned_df = cleaned_df.drop_duplicates(subset=[column], keep='first')
-                    st.write(f"Dropped duplicates in column '{column}'.")
-
-                if 'Fill Missing Data' in options:
-                    default_value = st.text_input(f"Enter default value for missing data in column '{column}':", key=f"default_{column}")
-                    cleaned_df[column] = cleaned_df[column].fillna(default_value)
-                    st.write(f"Filled missing data in column '{column}' with '{default_value}'.")
-
-                if 'Drop Rows with Missing Data' in options:
-                    cleaned_df = cleaned_df[cleaned_df[column].notnull()]
-                    st.write(f"Dropped rows with missing data in column '{column}'.")
-
-                if 'Correct Errors' in options:
-                    st.write(f"Corrected errors in column '{column}'.")
-
-                if 'Standardize Format' in options:
-                    if pd.api.types.is_string_dtype(cleaned_df[column]):
-                        cleaned_df[column] = cleaned_df[column].str.capitalize()
-                        st.write(f"Standardized format in column '{column}' (e.g., capitalized strings).")
-
-                if 'Trim Whitespaces' in options:
-                    if pd.api.types.is_string_dtype(cleaned_df[column]):
-                        cleaned_df[column] = cleaned_df[column].str.strip()
-                        st.write(f"Trimmed whitespaces in column '{column}'.")
-
-                if 'Convert Data Types' in options:
-                    try:
-                        cleaned_df[column] = pd.to_numeric(cleaned_df[column], errors='coerce')
-                        st.write(f"Converted column '{column}' to numeric.")
-                    except Exception as e:
-                        st.error(f"Failed to convert column '{column}' to numeric: {e}")
-
-                if 'Remove Outliers' in options:
-                    if pd.api.types.is_numeric_dtype(cleaned_df[column]):
-                        q1 = cleaned_df[column].quantile(0.25)
-                        q3 = cleaned_df[column].quantile(0.75)
-                        iqr = q3 - q1
-                        lower_bound = q1 - 1.5 * iqr
-                        upper_bound = q3 + 1.5 * iqr
-                        cleaned_df = cleaned_df[(cleaned_df[column] >= lower_bound) & (cleaned_df[column] <= upper_bound)]
-                        st.write(f"Removed outliers in column '{column}'.")
-
-                if 'Validate Data' in options:
-                    st.write(f"Validated data in column '{column}'.")
-
-            cleaned_df['id'] = range(1, len(cleaned_df) + 1)
-            st.write("Cleaned Data After Processing:")
-            st.dataframe(cleaned_df)
-
-            st.session_state.cleaned_data = cleaned_df
+            st.session_state.cleaned_data = clean_data(st.session_state.raw_data, cleaning_options)
             st.session_state.page = "data_loading"
     else:
         st.warning("No raw data available for cleaning.")
-    
     navigation_buttons("data_cleaning", next_page="data_loading", prev_page="data_extraction")
 
 # Page: Data Loading
+# Page: Data Loading
 def data_loading_page():
     st.title("Step 4: Data Loading")
+    
     if not st.session_state.cleaned_data.empty:
         st.write("Cleaned Data:")
         st.dataframe(st.session_state.cleaned_data)
-        if st.button("Load Cleaned Data"):
-            load_cleaned_data(st.session_state.cleaned_data, st.session_state.selected_db)
-            st.session_state.page = "completion"
+
+        # Input fields for database and table selection
+        st.subheader("Select Target Database and Table")
+        databases = get_databases()
+        if not databases.empty:
+            db_names = databases.iloc[:, 0].tolist()
+            target_db = st.selectbox('Select Target Database:', db_names, index=db_names.index(st.session_state.selected_db) if st.session_state.selected_db in db_names else 0)
+            
+            # Option to create a new table or append to an existing table
+            load_option = st.radio("Choose Load Option:", ["Create New Table", "Append to Existing Table"])
+            
+            if load_option == "Create New Table":
+                target_table = st.text_input("Enter New Table Name:", value="new_table")
+                if_exists_option = 'replace'
+            else:
+                tables = get_tables(target_db)
+                if not tables.empty:
+                    table_names = tables.iloc[:, 0].tolist()
+                    target_table = st.selectbox('Select Existing Table:', table_names)
+                    if_exists_option = 'append'
+                else:
+                    st.warning(f"No tables found in database '{target_db}'. Please create a new table.")
+                    return
+
+            # Schema selection (optional)
+            target_schema = st.text_input("Enter Target Schema (Optional):", value="etl")
+
+            # Load button
+            if st.button("Load Cleaned Data"):
+                try:
+                    engine = create_engine(
+                        f'mysql+pymysql://{st.session_state.db_user}:{quote_plus(st.session_state.db_password)}@{st.session_state.db_host}/{target_db}'
+                    )
+                    
+                    # Adjust the schema and table name based on user input
+                    cleaned_df = st.session_state.cleaned_data
+                    cleaned_df.to_sql(
+                        target_table,
+                        engine,
+                        schema=target_schema if target_schema else None,
+                        if_exists=if_exists_option,
+                        index=False
+                    )
+                    
+                    st.success(f"Cleaned data successfully loaded into '{target_db}.{target_schema}.{target_table}'!")
+                    st.session_state.page = "completion"
+                except Exception as e:
+                    st.error(f"Data loading failed: {e}")
+        else:
+            st.warning("No databases found or could not connect to the database server.")
     else:
         st.warning("No cleaned data available for loading.")
+    
     navigation_buttons("data_loading", prev_page="data_cleaning")
 
 # Page: Completion
@@ -226,4 +242,4 @@ def main():
 
 # Run the app
 if __name__ == "__main__":
-    main()
+    main()  
