@@ -27,7 +27,7 @@ You can install all dependencies at once using the following command:
 ```bash
 pip install -r requirements.txt
 
-
+````
 ## Requirements File (`requirements.txt`)
 
 ```plaintext
@@ -35,3 +35,4 @@ streamlit
 pandas
 pymysql
 sqlalchemy
+````
